@@ -1,83 +1,88 @@
 #!/usr/bin/env python2
 #-*- coding:utf-8 -*-
-
-import sys
-import zlib, os
+import zlib
 import click
-from subprocess import Popen, PIPE
 from PIL import Image
-import getopt
+import struct
 
+COLOR_TYPE = {0 : 'Grayscale', 2 : 'RGB', 3 : 'PLTE', 4 : 'Greyscale + Alpha', 6 : 'RGBA'}
+COMPRESSION = {0 : 'Deflate/Inflate'}
+FILTER_METHOD = {0 : 'Adaptive filtering'} 
+INTERLACE = {0 : 'No interlace', 1 : 'Adam7 interlace'} 
+FILTER_TYPE = {0 : 'None', 1 : 'Sub', 2 : 'Up', 3 : 'Average', 4 : 'Paeth'}
 
-#Const
-COLOR_TYPE = { 0 : 'Grayscale', 2 : 'RGB', 3 : 'PLTE', 4 : 'Greyscale + Alpha', 6 : 'RGBA'}
-COMPRESSION = { 0 : 'Deflate/Inflate'}
-FILTER_METHOD = { 0 : 'Adaptive filtering' } 
-INTERLACE = { 0 : 'No interlace', 1 : 'Adam7 interlace'} 
-actions = {}
+# PNG Class. Read meta informations, decompress the pixels data and analyze the filtering.
+class PNG:
+	def __init__(self, name):
+		self.name = name
+		self.data = open(name, 'r').read()
+		self.header(self.data)
+		self.pixelsData = self.decompress(self.data)
+		self.filters = self.filter_type()
+		# Creates a list with every RGB or RGBA pixels (TEMPORAIRE vu que c'est faux a cause des filter type)
+		self.pixels = self.pixel_value()
 
-class PNGTool:
-    def __init__(self, fileName):
-        self.fileName = fileName
-        self.fileData = open(fileName, 'r').read()
-        self.getHead(self.fileData)
-        self.pixelsData = self.decompress(self.fileData)
-        self.filters = self.filter_type()
-        #..... only works for rgb and rgba 
-        self.pixels = map(''.join, zip(*[iter(self.pixelsData)]*len(self.colortype)))
-
-    def getHead(self, data):
-        #pack...
-        head = data[data.find("IHDR")+4:data.find("IDAT")]
-        self.w = int(head[0:4].encode('hex'), 16)
-        self.h = int(head[4:8].encode('hex'), 16)
-        self.bitdepth = ord(head[8])
-        self.colortype = COLOR_TYPE[ord(head[9])]
-        self.compressionmethod = COMPRESSION[ord(head[10])]
-        self.filtermethod = FILTER_METHOD[ord(head[11])]
-        self.interlace = INTERLACE[ord(head[12])]
+	# Meta informations from IHDR chunk
+	def header(self, data):
+		head = data[data.find("IHDR")+4:data.find("IDAT")]
+		self.w = struct.unpack("!I", head[0:4])[0]
+		self.h = struct.unpack("!I", head[4:8])[0]
+		self.bitdepth = ord(head[8])
+		self.colortype = COLOR_TYPE[ord(head[9])]
+		self.compressionmethod = COMPRESSION[ord(head[10])]
+		self.filtermethod = FILTER_METHOD[ord(head[11])]
+		self.interlace = INTERLACE[ord(head[12])]
     
-    def decompress(self, image):
-        #Get the IDATs chunks
-        chunks = image[image.find("IDAT"):image.find("IEND")]
-        chunks = chunks.split("IDAT")
+	# Decompress pixels data with zlib compression method
+	def decompress(self, image):
+		# Get the IDATs chunks
+		chunks = image[image.find("IDAT"):image.find("IEND")]
+		chunks = chunks.split("IDAT")
 
-        #Remove the CRCs and length of IDATs and join the data
-        data_compressed = ''.join(chunks[i][:-8] for i in range(len(chunks)))
-        
-        #Decompress the data
-        data = zlib.decompress(data_compressed)
-        return data
-    
-    def filter_type(self):
-        #Each scanline correspond to the width of the image * 4 (RGBA) + 1 (filter type)
-        if self.colortype == 'RGB': colortype = 3 #RGB
-        else : colortype = 4 #RGBA
-        len_scanline = 1 + self.w * colortype 
-        size = len(self.pixelsData)
-        
-        #Get the filter type of each scanline
-        filters = []
-        for s in range(size/len_scanline):
-            scanline = self.pixelsData[len_scanline*s:len_scanline*(s+1)]
-            filt = ord(scanline[0])
-            filters.append(filt)
-        return filters
+		# Remove the CRCs and length of IDATs and join the data
+		data_compressed = ''.join(chunks[i][:-8] for i in range(len(chunks)))
+		
+		# Decompress the data
+		data = zlib.decompress(data_compressed)
+		return data
 
-    def info(self):
-        print " ::::: %s ::::: " % self.fileName
-        print " Width %d " % self.w
-        print " Heigh %d " % self.h
-        print " Bit depth %d " % self.bitdepth
-        print " Color type %s " % self.colortype
-        print " Compression method %s " % self.compressionmethod
-        print " Filter method %s " % self.filtermethod
-        print " Interlace method %s " % self.interlace
-        print len(self.pixelsData)/3
-        print set(self.filters)
+	# Returns every filters bytes in the PNG pixel data 
+	def filter_type(self):
+		# Each scanline correspond to the width of the image * 4 (RGBA) + 1 (filter type)
+		len_scanline = 1 + self.w * len(self.colortype)
+		size = len(self.pixelsData)
+		
+		# Get the filter type of each scanline
+		filters = []
+		for s in range(size/len_scanline):
+			scanline = self.pixelsData[len_scanline*s:len_scanline*(s+1)]
+			filters.append(ord(scanline[0]))
+		
+		return filters
 
-    def pixel(self, c=600):
-        print ''.join(''.join(self.pixels[i]) for i in range(len(self.pixels)-1,len(self.pixels)-c,-1))
+	# Shows meta informations of the PNG image
+	def info(self):
+		click.secho('\n [*] %s ' % self.name, fg = 'magenta', bold = True)
+		click.secho('     %s x %s, %s-bit/color, %s, %s, %s' % (self.w, self.h, self.bitdepth, self.colortype, self.interlace, self.compressionmethod), fg = 'magenta')
+		print "     %d bytes of pixel data " % (len(self.pixelsData))
+		print "     %s, filter type(s) : %s " % (self.filtermethod, (', '.join(FILTER_TYPE[i] + "(" + str(i) + ")" for i in list(set(self.filters)))))
+
+	# Returns a 2D array (w x h) of tuple of the real pixels value (RGB, RGBA)
+	def pixel_value(self):
+		pixels = []
+		
+		# Remove the filter type byte on every scanlines of the data.
+		pixel_data = ''.join(self.pixelsData[i+1:i+self.w] for i in range(0, len(self.pixelsData), self.w))
+
+		psize = len(self.colortype)
+		# Create the 2D array of pixels
+		for x in xrange(self.w):
+			for y in xrange(self.h):
+				position = psize * (x + (y * self.w))
+				pixels[x][y] = pixel_data[position : position + psize]
+		
+		return pixels
+
 
 class StegTool():
     def __init__(self, image, flag):
@@ -231,33 +236,34 @@ class StegTool():
 
 
 @click.command(context_settings = dict(help_option_names = ['-h', '--help']))
-@click.option('-f', help="PNG image")
-@click.option('--search', help="flag search format")
+@click.option('-f', help="Specify the PNG image to search on")
+@click.option('--search', help="Pattern/word to search for (flag format)")
 @click.option('-c', '--convert', default=True, help="type")
 @click.option('-cb', is_flag = True, help="color to binary value 0 1")
-
-
 def main(f, search, convert, cb):
-    '''Steganography solver for PNG images'''
-    if (f):
-        pf = PNGTool(f)
-        #pf.info()
-        #pf.pixel
-        st = StegTool(Image.open(f, 'r'), search)
-        
-        if (convert):
-            if convert == "ascii": print st.ascii(conv.position())
-            elif convert == "lsb": print st.lsb(conv.position())
-            else: st.basic()
-        
-        # color2bin
-        if(cb):
-            b0  = click.prompt('Pixel value for binary 0', type = int)
-            b1 = click.prompt('Pixel value for binary 1', type = int)
-            pos  = click.prompt('Position of RGB (R:0, G:1, B:2)', type = int)
-            st.color2bin(b0, b1, pos)
-    else:
-        click.secho('Dude. See -h/--help', fg = 'yellow', bold = True)
+	'''Steganography solver for PNG images'''
+	if (f):
+		
+		pf = PNG(f)
+		pf.info()
+		#pf.pixel
+		st = StegTool(Image.open(f, 'r'), search)
+		
+		if (convert):
+			if convert == "ascii": print st.ascii(conv.position())
+			elif convert == "lsb": print st.lsb(conv.position())
+			else: st.basic()
+		
+		# color2bin
+		if(cb):
+			b0  = click.prompt('Pixel value for binary 0', type = int)
+			b1 = click.prompt('Pixel value for binary 1', type = int)
+			pos  = click.prompt('Position of RGB (R:0, G:1, B:2)', type = int)
+			st.color2bin(b0, b1, pos)
+
+	# showing the way
+	else:
+		click.secho('Please specify a PNG image to perform the test on. See -h/--help', fg = 'yellow', bold = True)
 
 if __name__ == '__main__':
     main()

@@ -13,7 +13,7 @@ This is my main tool for solving steganography CTF challenges. I'm trying to inc
 
 ### Prerequisites
 
-To get a beautiful command line interface, I'm using (click)[http://click.pocoo.org/5/] library for Python 2.
+To get a beautiful command line interface, I'm using [click[(http://click.pocoo.org/5/) library for Python 2.
 
 
 ``` 
